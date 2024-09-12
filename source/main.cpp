@@ -29,6 +29,7 @@
 
 
 #include "FreeRTOS.h"
+#include "timers.h"
 #include "task.h"
 #include <stdio.h>
 #include <algorithm>
@@ -118,6 +119,8 @@
 
 #include "main.h"
 
+static uint32_t idleSeconds = 0;
+
 static void core1()
 {
     for( ;; )
@@ -135,6 +138,7 @@ static void core0( void *pvParameters )
     {
         if (sem_acquire_timeout_us(&base.receiverSemaphore, portMAX_DELAY))
         {
+            gpio_put(RELAY_PIN, 1);
             int wanted, received;
             do
             {
@@ -146,6 +150,7 @@ static void core0( void *pvParameters )
                 }
             }while(wanted == received);
 
+            idleSeconds = 0;
             sem_release(&base.serialSemaphore);
         }
     }
@@ -156,9 +161,21 @@ static void serialEvent(void *)
     sem_release(&base.receiverSemaphore);
 }
 
+static void idleTimerCallback(TimerHandle_t xTimer)
+{
+    idleSeconds++;
+    
+    if (idleSeconds >= 5)
+        gpio_put(RELAY_PIN, 0);
+}
+
 int main(void)
 {
     stdio_init_all();
+
+    gpio_init(RELAY_PIN);
+    gpio_set_dir(RELAY_PIN, GPIO_OUT);
+    gpio_put(RELAY_PIN, 0);
 
     sem_init(&base.serialSemaphore, 0, 1);
 
@@ -167,6 +184,17 @@ int main(void)
     multicore_launch_core1(core1);
 
     stdio_set_chars_available_callback(serialEvent, nullptr);
+
+    TimerHandle_t xTimer;
+    xTimer = xTimerCreate(
+        "check_idle",
+        pdMS_TO_TICKS(1000),
+        pdTRUE,
+        ( void * ) 0,
+        idleTimerCallback
+    );
+
+    xTimerStart( xTimer, 0 );
 
     xTaskCreate(core0,
             "HyperSerialPico:core0",
